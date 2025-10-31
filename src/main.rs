@@ -4,6 +4,9 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use notify::{
+    Config, Event as NotifyEvent, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -16,6 +19,7 @@ use similar::{ChangeTag, TextDiff};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver};
 
 #[derive(Parser, Debug)]
 #[command(name = "audit-box")]
@@ -70,10 +74,12 @@ struct App {
     is_diff_view: bool,
     show_confirm_dialog: bool,
     dialog_button: DialogButton,
+    fs_events: Receiver<Result<NotifyEvent, notify::Error>>,
+    needs_refresh: bool,
 }
 
 impl App {
-    fn new(overlay_path: &Path, base_path: PathBuf) -> io::Result<Self> {
+    fn new(overlay_path: &Path, base_path: PathBuf, fs_events: Receiver<Result<NotifyEvent, notify::Error>>) -> io::Result<Self> {
         let mut files = Vec::new();
         Self::scan_directory(overlay_path, overlay_path, &base_path, 0, &mut files)?;
 
@@ -93,6 +99,8 @@ impl App {
             is_diff_view: false,
             show_confirm_dialog: false,
             dialog_button: DialogButton::Ok,
+            fs_events,
+            needs_refresh: false,
         };
 
         app.load_selected_file_content();
@@ -333,10 +341,57 @@ impl App {
 
         Ok(())
     }
+
+    fn refresh_file_list(&mut self) -> io::Result<()> {
+        let current_selection = self.list_state.selected();
+        let selected_path = current_selection
+            .and_then(|i| self.files.get(i))
+            .map(|e| e.path.clone());
+
+        // Rescan the overlay directory
+        let mut files = Vec::new();
+        Self::scan_directory(&self.overlay_path, &self.overlay_path, &self.base_path, 0, &mut files)?;
+
+        // Try to restore selection to the same file
+        let new_selection = if let Some(ref path) = selected_path {
+            files.iter().position(|e| e.path == *path)
+        } else {
+            None
+        };
+
+        self.files = files;
+        if let Some(idx) = new_selection {
+            self.list_state.select(Some(idx));
+        } else if !self.files.is_empty() {
+            self.list_state.select(Some(0));
+        }
+
+        self.load_selected_file_content();
+        Ok(())
+    }
+
+    fn check_fs_events(&mut self) {
+        // Check for filesystem events without blocking
+        while let Ok(event) = self.fs_events.try_recv() {
+            if let Ok(event) = event {
+                match event.kind {
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                        self.needs_refresh = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    // Setup filesystem watcher
+    let (tx, rx) = channel();
+    let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+    watcher.watch(&args.overlay, RecursiveMode::Recursive)?;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -346,7 +401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
-    let mut app = App::new(&args.overlay, args.base)?;
+    let mut app = App::new(&args.overlay, args.base, rx)?;
 
     // Run app
     let res = run_app(&mut terminal, &mut app);
@@ -368,6 +423,13 @@ fn run_app<B: ratatui::backend::Backend>(
     app: &mut App,
 ) -> io::Result<()> {
     loop {
+        // Check for filesystem events
+        app.check_fs_events();
+        if app.needs_refresh {
+            app.refresh_file_list()?;
+            app.needs_refresh = false;
+        }
+
         terminal.draw(|f| {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
