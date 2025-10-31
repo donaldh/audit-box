@@ -108,7 +108,6 @@ impl App {
                             self.is_diff_view = true;
                             self.file_content = file_operations::generate_diff(
                                 &entry,
-                                &self.overlay_path,
                                 &self.base_path,
                             );
                         }
@@ -282,7 +281,7 @@ impl App {
                 )?;
             } else {
                 // File was deleted - remove it
-                if let Some(removed_idx) =
+                if let Some(_removed_idx) =
                     file_operations::remove_file_from_list(&mut self.files, &path)
                 {
                     // Adjust selection if needed

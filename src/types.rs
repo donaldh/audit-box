@@ -24,7 +24,6 @@ pub struct FileEntry {
     pub name: String,
     pub is_dir: bool,
     pub depth: usize,
-    pub expanded: bool,
     pub status: FileStatus,
     pub selected: bool,
 }

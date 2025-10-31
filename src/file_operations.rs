@@ -2,7 +2,7 @@ use crate::types::{FileEntry, FileStatus};
 use similar::{ChangeTag, TextDiff};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub fn scan_directory(
     overlay_root: &Path,
@@ -38,7 +38,6 @@ pub fn scan_directory(
             name,
             is_dir,
             depth,
-            expanded: false,
             status,
             selected: false,
         });
@@ -51,7 +50,7 @@ pub fn scan_directory(
     Ok(())
 }
 
-pub fn generate_diff(entry: &FileEntry, overlay_path: &Path, base_path: &Path) -> Vec<String> {
+pub fn generate_diff(entry: &FileEntry, base_path: &Path) -> Vec<String> {
     // Calculate the path in the base filesystem
     let overlay_root = entry.path.ancestors().nth(entry.depth + 1).unwrap_or(&entry.path);
     let rel_path = entry.path.strip_prefix(overlay_root).unwrap_or(&entry.path);
@@ -149,7 +148,6 @@ pub fn update_or_add_file(
         name,
         is_dir: false,
         depth,
-        expanded: false,
         status,
         selected: false,
     };
