@@ -50,6 +50,7 @@ struct FileEntry {
     depth: usize,
     expanded: bool,
     status: FileStatus,
+    selected: bool,
 }
 
 struct App {
@@ -122,6 +123,7 @@ impl App {
                 depth,
                 expanded: false,
                 status,
+                selected: false,
             });
 
             if is_dir {
@@ -240,6 +242,14 @@ impl App {
             ActivePane::FileContent => ActivePane::FileList,
         };
     }
+
+    fn toggle_selection(&mut self) {
+        if let Some(selected) = self.list_state.selected() {
+            if let Some(entry) = self.files.get_mut(selected) {
+                entry.selected = !entry.selected;
+            }
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -296,8 +306,10 @@ fn run_app<B: ratatui::backend::Backend>(
                         FileStatus::New => Color::Green,
                         FileStatus::Modified => Color::Yellow,
                     };
+                    let selection_indicator = if entry.selected { "[✓] " } else { "[ ] " };
 
                     let content = vec![
+                        Span::raw(selection_indicator),
                         Span::raw(format!("{}{} ", indent, icon)),
                         Span::styled(status_indicator, Style::default().fg(status_color)),
                         Span::raw(format!(" {}", entry.name)),
@@ -318,7 +330,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(file_list_border_style)
-                        .title("Files [Tab: switch, ↑↓: navigate, q: quit]"),
+                        .title("Files [Space: select, Tab: switch, ↑↓: navigate, q: quit]"),
                 )
                 .highlight_style(
                     Style::default()
@@ -375,6 +387,11 @@ fn run_app<B: ratatui::backend::Backend>(
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Tab => app.toggle_pane(),
+                    KeyCode::Char(' ') => {
+                        if app.active_pane == ActivePane::FileList {
+                            app.toggle_selection();
+                        }
+                    }
                     KeyCode::Down => {
                         match app.active_pane {
                             ActivePane::FileList => app.next(),
