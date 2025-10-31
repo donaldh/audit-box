@@ -6,10 +6,10 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Terminal,
 };
 use std::fs;
@@ -35,6 +35,12 @@ enum FileStatus {
     Modified,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum ActivePane {
+    FileList,
+    FileContent,
+}
+
 #[derive(Debug, Clone)]
 struct FileEntry {
     path: PathBuf,
@@ -49,6 +55,9 @@ struct App {
     files: Vec<FileEntry>,
     list_state: ListState,
     base_path: PathBuf,
+    active_pane: ActivePane,
+    file_content: Vec<String>,
+    content_scroll: usize,
 }
 
 impl App {
@@ -61,11 +70,17 @@ impl App {
             list_state.select(Some(0));
         }
 
-        Ok(App {
+        let mut app = App {
             files,
             list_state,
             base_path,
-        })
+            active_pane: ActivePane::FileList,
+            file_content: Vec::new(),
+            content_scroll: 0,
+        };
+
+        app.load_selected_file_content();
+        Ok(app)
     }
 
     fn scan_directory(
@@ -126,6 +141,7 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+        self.load_selected_file_content();
     }
 
     fn previous(&mut self) {
@@ -140,6 +156,43 @@ impl App {
             None => 0,
         };
         self.list_state.select(Some(i));
+        self.load_selected_file_content();
+    }
+
+    fn load_selected_file_content(&mut self) {
+        self.content_scroll = 0;
+        if let Some(selected) = self.list_state.selected() {
+            if let Some(entry) = self.files.get(selected) {
+                if !entry.is_dir {
+                    if let Ok(content) = fs::read_to_string(&entry.path) {
+                        self.file_content = content.lines().map(|s| s.to_string()).collect();
+                    } else {
+                        self.file_content = vec!["<Unable to read file>".to_string()];
+                    }
+                } else {
+                    self.file_content = vec!["<Directory>".to_string()];
+                }
+            }
+        }
+    }
+
+    fn scroll_content_down(&mut self) {
+        if self.content_scroll < self.file_content.len().saturating_sub(1) {
+            self.content_scroll += 1;
+        }
+    }
+
+    fn scroll_content_up(&mut self) {
+        if self.content_scroll > 0 {
+            self.content_scroll -= 1;
+        }
+    }
+
+    fn toggle_pane(&mut self) {
+        self.active_pane = match self.active_pane {
+            ActivePane::FileList => ActivePane::FileContent,
+            ActivePane::FileContent => ActivePane::FileList,
+        };
     }
 }
 
@@ -178,9 +231,11 @@ fn run_app<B: ratatui::backend::Backend>(
     loop {
         terminal.draw(|f| {
             let chunks = Layout::default()
-                .constraints([Constraint::Percentage(100)].as_ref())
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
                 .split(f.area());
 
+            // File list pane
             let items: Vec<ListItem> = app
                 .files
                 .iter()
@@ -206,11 +261,18 @@ fn run_app<B: ratatui::backend::Backend>(
                 })
                 .collect();
 
+            let file_list_border_style = if app.active_pane == ActivePane::FileList {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+
             let items = List::new(items)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title("Overlay Filesystem Contents (↑↓: navigate, q: quit)"),
+                        .border_style(file_list_border_style)
+                        .title("Files [Tab: switch, ↑↓: navigate, q: quit]"),
                 )
                 .highlight_style(
                     Style::default()
@@ -220,14 +282,50 @@ fn run_app<B: ratatui::backend::Backend>(
                 .highlight_symbol(">> ");
 
             f.render_stateful_widget(items, chunks[0], &mut app.list_state);
+
+            // File content pane
+            let content_border_style = if app.active_pane == ActivePane::FileContent {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+
+            let content_text: Vec<Line> = app
+                .file_content
+                .iter()
+                .skip(app.content_scroll)
+                .map(|line| Line::from(line.as_str()))
+                .collect();
+
+            let paragraph = Paragraph::new(content_text)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(content_border_style)
+                        .title("Content [Tab: switch, ↑↓: scroll]"),
+                )
+                .wrap(Wrap { trim: false });
+
+            f.render_widget(paragraph, chunks[1]);
         })?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Down => app.next(),
-                    KeyCode::Up => app.previous(),
+                    KeyCode::Tab => app.toggle_pane(),
+                    KeyCode::Down => {
+                        match app.active_pane {
+                            ActivePane::FileList => app.next(),
+                            ActivePane::FileContent => app.scroll_content_down(),
+                        }
+                    }
+                    KeyCode::Up => {
+                        match app.active_pane {
+                            ActivePane::FileList => app.previous(),
+                            ActivePane::FileContent => app.scroll_content_up(),
+                        }
+                    }
                     _ => {}
                 }
             }
