@@ -75,7 +75,7 @@ struct App {
     show_confirm_dialog: bool,
     dialog_button: DialogButton,
     fs_events: Receiver<Result<NotifyEvent, notify::Error>>,
-    needs_refresh: bool,
+    pending_updates: Vec<PathBuf>,
 }
 
 impl App {
@@ -100,7 +100,7 @@ impl App {
             show_confirm_dialog: false,
             dialog_button: DialogButton::Ok,
             fs_events,
-            needs_refresh: false,
+            pending_updates: Vec::new(),
         };
 
         app.load_selected_file_content();
@@ -376,9 +376,110 @@ impl App {
             if let Ok(event) = event {
                 match event.kind {
                     EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
-                        self.needs_refresh = true;
+                        // Collect all affected paths
+                        for path in event.paths {
+                            if !self.pending_updates.contains(&path) {
+                                self.pending_updates.push(path);
+                            }
+                        }
                     }
                     _ => {}
+                }
+            }
+        }
+    }
+
+    fn process_pending_updates(&mut self) -> io::Result<()> {
+        if self.pending_updates.is_empty() {
+            return Ok(());
+        }
+
+        let current_selection = self.list_state.selected();
+        let selected_path = current_selection
+            .and_then(|i| self.files.get(i))
+            .map(|e| e.path.clone());
+
+        // Collect paths to process
+        let paths: Vec<PathBuf> = self.pending_updates.drain(..).collect();
+
+        for path in paths {
+            if path.is_dir() {
+                // For directories, refresh the entire list (simpler for now)
+                self.refresh_file_list()?;
+                return Ok(());
+            } else if path.exists() {
+                // File exists - update or add it
+                self.update_or_add_file(&path)?;
+            } else {
+                // File was deleted - remove it
+                self.remove_file(&path);
+            }
+        }
+
+        // Restore selection if possible
+        if let Some(ref path) = selected_path {
+            if let Some(idx) = self.files.iter().position(|e| e.path == *path) {
+                self.list_state.select(Some(idx));
+            }
+        }
+
+        // Reload content if the selected file changed
+        self.load_selected_file_content();
+
+        Ok(())
+    }
+
+    fn update_or_add_file(&mut self, path: &Path) -> io::Result<()> {
+        let rel_path = path.strip_prefix(&self.overlay_path).unwrap_or(path);
+        let base_file = self.base_path.join(rel_path);
+
+        let status = if base_file.exists() {
+            FileStatus::Modified
+        } else {
+            FileStatus::New
+        };
+
+        let depth = rel_path.components().count() - 1;
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+
+        let new_entry = FileEntry {
+            path: path.to_path_buf(),
+            name,
+            is_dir: false,
+            depth,
+            expanded: false,
+            status,
+            selected: false,
+        };
+
+        // Find if the file already exists in the list
+        if let Some(idx) = self.files.iter().position(|e| e.path == *path) {
+            // Update existing entry, but preserve selection state
+            let was_selected = self.files[idx].selected;
+            self.files[idx] = new_entry;
+            self.files[idx].selected = was_selected;
+        } else {
+            // Insert new entry in sorted position
+            let insert_pos = self.files
+                .iter()
+                .position(|e| e.path > *path)
+                .unwrap_or(self.files.len());
+            self.files.insert(insert_pos, new_entry);
+        }
+
+        Ok(())
+    }
+
+    fn remove_file(&mut self, path: &Path) {
+        if let Some(idx) = self.files.iter().position(|e| e.path == *path) {
+            self.files.remove(idx);
+
+            // Adjust selection if needed
+            if let Some(selected) = self.list_state.selected() {
+                if selected >= self.files.len() && !self.files.is_empty() {
+                    self.list_state.select(Some(self.files.len() - 1));
+                } else if self.files.is_empty() {
+                    self.list_state.select(None);
                 }
             }
         }
@@ -423,12 +524,9 @@ fn run_app<B: ratatui::backend::Backend>(
     app: &mut App,
 ) -> io::Result<()> {
     loop {
-        // Check for filesystem events
+        // Check for filesystem events and process targeted updates
         app.check_fs_events();
-        if app.needs_refresh {
-            app.refresh_file_list()?;
-            app.needs_refresh = false;
-        }
+        app.process_pending_updates()?;
 
         terminal.draw(|f| {
             let chunks = Layout::default()
