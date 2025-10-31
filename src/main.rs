@@ -73,6 +73,7 @@ struct App {
     content_scroll: usize,
     is_diff_view: bool,
     show_confirm_dialog: bool,
+    show_discard_dialog: bool,
     dialog_button: DialogButton,
     fs_events: Receiver<Result<NotifyEvent, notify::Error>>,
     pending_updates: Vec<PathBuf>,
@@ -98,6 +99,7 @@ impl App {
             content_scroll: 0,
             is_diff_view: false,
             show_confirm_dialog: false,
+            show_discard_dialog: false,
             dialog_button: DialogButton::Ok,
             fs_events,
             pending_updates: Vec::new(),
@@ -484,6 +486,24 @@ impl App {
             }
         }
     }
+
+    fn discard_selected_file(&mut self) -> io::Result<()> {
+        if let Some(selected) = self.list_state.selected() {
+            if let Some(entry) = self.files.get(selected) {
+                let path = entry.path.clone();
+
+                // Delete the file from overlay filesystem
+                if path.is_file() {
+                    fs::remove_file(&path)?;
+                    // The filesystem watcher will handle updating the UI
+                } else if path.is_dir() {
+                    fs::remove_dir_all(&path)?;
+                    // The filesystem watcher will handle updating the UI
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -701,12 +721,93 @@ fn run_app<B: ratatui::backend::Backend>(
 
                 f.render_widget(buttons, dialog_chunks[1]);
             }
+
+            // Render discard confirmation dialog if visible
+            if app.show_discard_dialog {
+                if let Some(selected) = app.list_state.selected() {
+                    if let Some(entry) = app.files.get(selected) {
+                        // Create centered dialog area
+                        let area = f.area();
+                        let dialog_width = area.width.min(60);
+                        let dialog_height = 10;
+                        let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
+                        let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
+
+                        let dialog_area = Rect {
+                            x: dialog_x,
+                            y: dialog_y,
+                            width: dialog_width,
+                            height: dialog_height,
+                        };
+
+                        // Clear the area and render dialog
+                        f.render_widget(Clear, dialog_area);
+
+                        let dialog_block = Block::default()
+                            .title("Discard File")
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(Color::Red));
+
+                        f.render_widget(dialog_block, dialog_area);
+
+                        // Split dialog into content and buttons
+                        let dialog_chunks = Layout::default()
+                            .direction(Direction::Vertical)
+                            .margin(1)
+                            .constraints([
+                                Constraint::Min(3),
+                                Constraint::Length(3),
+                            ])
+                            .split(dialog_area);
+
+                        // Render confirmation message
+                        let rel_path = entry.path.strip_prefix(&app.overlay_path).unwrap();
+                        let file_type = if entry.is_dir { "directory" } else { "file" };
+                        let message = vec![
+                            Line::from("Are you sure you want to discard this file?"),
+                            Line::from(""),
+                            Line::from(format!("  {} {}", file_type, rel_path.display())),
+                            Line::from(""),
+                            Line::from(Span::styled(
+                                "This action cannot be undone!",
+                                Style::default().fg(Color::Red),
+                            )),
+                        ];
+
+                        let message_paragraph = Paragraph::new(message)
+                            .wrap(Wrap { trim: false });
+                        f.render_widget(message_paragraph, dialog_chunks[0]);
+
+                        // Render buttons
+                        let ok_style = if app.dialog_button == DialogButton::Ok {
+                            Style::default().bg(Color::Red).fg(Color::Black)
+                        } else {
+                            Style::default()
+                        };
+                        let cancel_style = if app.dialog_button == DialogButton::Cancel {
+                            Style::default().bg(Color::Green).fg(Color::Black)
+                        } else {
+                            Style::default()
+                        };
+
+                        let buttons = Paragraph::new(Line::from(vec![
+                            Span::raw("   "),
+                            Span::styled(" Discard ", ok_style),
+                            Span::raw("   "),
+                            Span::styled(" Cancel ", cancel_style),
+                        ]))
+                        .alignment(Alignment::Center);
+
+                        f.render_widget(buttons, dialog_chunks[1]);
+                    }
+                }
+            }
         })?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if app.show_confirm_dialog {
-                    // Handle dialog navigation
+                    // Handle apply dialog navigation
                     match key.code {
                         KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
                             app.dialog_button = match app.dialog_button {
@@ -729,12 +830,39 @@ fn run_app<B: ratatui::backend::Backend>(
                         }
                         _ => {}
                     }
+                } else if app.show_discard_dialog {
+                    // Handle discard dialog navigation
+                    match key.code {
+                        KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                            app.dialog_button = match app.dialog_button {
+                                DialogButton::Ok => DialogButton::Cancel,
+                                DialogButton::Cancel => DialogButton::Ok,
+                            };
+                        }
+                        KeyCode::Enter => {
+                            if app.dialog_button == DialogButton::Ok {
+                                if let Err(e) = app.discard_selected_file() {
+                                    eprintln!("Error discarding file: {}", e);
+                                }
+                            }
+                            app.show_discard_dialog = false;
+                            app.dialog_button = DialogButton::Ok;
+                        }
+                        KeyCode::Esc => {
+                            app.show_discard_dialog = false;
+                            app.dialog_button = DialogButton::Ok;
+                        }
+                        _ => {}
+                    }
                 } else {
                     // Handle normal navigation
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('a') => {
                             app.show_confirm_dialog = true;
+                        }
+                        KeyCode::Char('k') => {
+                            app.show_discard_dialog = true;
                         }
                         KeyCode::Tab => app.toggle_pane(),
                         KeyCode::Char(' ') => {
