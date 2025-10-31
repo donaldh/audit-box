@@ -29,6 +29,12 @@ struct Args {
     base: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum FileStatus {
+    New,
+    Modified,
+}
+
 #[derive(Debug, Clone)]
 struct FileEntry {
     path: PathBuf,
@@ -36,6 +42,7 @@ struct FileEntry {
     is_dir: bool,
     depth: usize,
     expanded: bool,
+    status: FileStatus,
 }
 
 struct App {
@@ -47,7 +54,7 @@ struct App {
 impl App {
     fn new(overlay_path: &Path, base_path: PathBuf) -> io::Result<Self> {
         let mut files = Vec::new();
-        Self::scan_directory(overlay_path, overlay_path, 0, &mut files)?;
+        Self::scan_directory(overlay_path, overlay_path, &base_path, 0, &mut files)?;
 
         let mut list_state = ListState::default();
         if !files.is_empty() {
@@ -62,8 +69,9 @@ impl App {
     }
 
     fn scan_directory(
-        base: &Path,
+        overlay_root: &Path,
         dir: &Path,
+        base_root: &Path,
         depth: usize,
         entries: &mut Vec<FileEntry>,
     ) -> io::Result<()> {
@@ -78,16 +86,28 @@ impl App {
             let name = entry.file_name().to_string_lossy().to_string();
             let is_dir = path.is_dir();
 
+            // Calculate relative path from overlay root
+            let rel_path = path.strip_prefix(overlay_root).unwrap();
+            let base_path = base_root.join(rel_path);
+
+            // Determine status: New if doesn't exist in base, Modified if it exists
+            let status = if base_path.exists() {
+                FileStatus::Modified
+            } else {
+                FileStatus::New
+            };
+
             entries.push(FileEntry {
                 path: path.clone(),
                 name,
                 is_dir,
                 depth,
                 expanded: false,
+                status,
             });
 
             if is_dir {
-                Self::scan_directory(base, &path, depth + 1, entries)?;
+                Self::scan_directory(overlay_root, &path, base_root, depth + 1, entries)?;
             }
         }
 
@@ -167,9 +187,22 @@ fn run_app<B: ratatui::backend::Backend>(
                 .map(|entry| {
                     let indent = "  ".repeat(entry.depth);
                     let icon = if entry.is_dir { "📁" } else { "📄" };
-                    let content = format!("{}{} {}", indent, icon, entry.name);
+                    let status_indicator = match entry.status {
+                        FileStatus::New => "[N]",
+                        FileStatus::Modified => "[M]",
+                    };
+                    let status_color = match entry.status {
+                        FileStatus::New => Color::Green,
+                        FileStatus::Modified => Color::Yellow,
+                    };
 
-                    ListItem::new(Line::from(vec![Span::raw(content)]))
+                    let content = vec![
+                        Span::raw(format!("{}{} ", indent, icon)),
+                        Span::styled(status_indicator, Style::default().fg(status_color)),
+                        Span::raw(format!(" {}", entry.name)),
+                    ];
+
+                    ListItem::new(Line::from(content))
                 })
                 .collect();
 
