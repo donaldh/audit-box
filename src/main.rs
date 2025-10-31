@@ -245,8 +245,38 @@ impl App {
 
     fn toggle_selection(&mut self) {
         if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.files.get_mut(selected) {
-                entry.selected = !entry.selected;
+            if let Some(entry) = self.files.get(selected).cloned() {
+                if entry.is_dir {
+                    // For directories, toggle the directory itself
+                    let new_state = !entry.selected;
+                    self.files[selected].selected = new_state;
+
+                    let dir_path = entry.path.clone();
+                    let dir_depth = entry.depth;
+
+                    // Apply to all children (both files and directories)
+                    for i in (selected + 1)..self.files.len() {
+                        let child = &self.files[i];
+                        if child.depth <= dir_depth || !child.path.starts_with(&dir_path) {
+                            break;
+                        }
+                        self.files[i].selected = new_state;
+                    }
+                } else {
+                    // For files, toggle and handle parent deselection if needed
+                    let new_state = !entry.selected;
+                    self.files[selected].selected = new_state;
+
+                    // If deselecting a file, deselect all parent directories
+                    if !new_state {
+                        let file_path = entry.path.clone();
+                        for i in 0..selected {
+                            if self.files[i].is_dir && file_path.starts_with(&self.files[i].path) {
+                                self.files[i].selected = false;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
