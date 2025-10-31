@@ -12,6 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Terminal,
 };
+use similar::{ChangeTag, TextDiff};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -58,6 +59,7 @@ struct App {
     active_pane: ActivePane,
     file_content: Vec<String>,
     content_scroll: usize,
+    is_diff_view: bool,
 }
 
 impl App {
@@ -77,6 +79,7 @@ impl App {
             active_pane: ActivePane::FileList,
             file_content: Vec::new(),
             content_scroll: 0,
+            is_diff_view: false,
         };
 
         app.load_selected_file_content();
@@ -162,18 +165,61 @@ impl App {
     fn load_selected_file_content(&mut self) {
         self.content_scroll = 0;
         if let Some(selected) = self.list_state.selected() {
-            if let Some(entry) = self.files.get(selected) {
+            if let Some(entry) = self.files.get(selected).cloned() {
                 if !entry.is_dir {
-                    if let Ok(content) = fs::read_to_string(&entry.path) {
-                        self.file_content = content.lines().map(|s| s.to_string()).collect();
-                    } else {
-                        self.file_content = vec!["<Unable to read file>".to_string()];
+                    match entry.status {
+                        FileStatus::New => {
+                            // For new files, just show the content
+                            self.is_diff_view = false;
+                            if let Ok(content) = fs::read_to_string(&entry.path) {
+                                self.file_content = content.lines().map(|s| s.to_string()).collect();
+                            } else {
+                                self.file_content = vec!["<Unable to read file>".to_string()];
+                            }
+                        }
+                        FileStatus::Modified => {
+                            // For modified files, generate and show a diff
+                            self.is_diff_view = true;
+                            self.file_content = self.generate_diff(&entry);
+                        }
                     }
                 } else {
+                    self.is_diff_view = false;
                     self.file_content = vec!["<Directory>".to_string()];
                 }
             }
         }
+    }
+
+    fn generate_diff(&self, entry: &FileEntry) -> Vec<String> {
+        // Calculate the path in the base filesystem
+        let overlay_root = entry.path.ancestors().nth(entry.depth + 1).unwrap_or(&entry.path);
+        let rel_path = entry.path.strip_prefix(overlay_root).unwrap_or(&entry.path);
+        let base_file = self.base_path.join(rel_path);
+
+        // Read both files
+        let base_content = fs::read_to_string(&base_file).unwrap_or_default();
+        let overlay_content = fs::read_to_string(&entry.path).unwrap_or_default();
+
+        // Generate diff
+        let diff = TextDiff::from_lines(&base_content, &overlay_content);
+
+        let mut result = Vec::new();
+        result.push(format!("--- {}", base_file.display()));
+        result.push(format!("+++ {}", entry.path.display()));
+        result.push(String::new());
+
+        for change in diff.iter_all_changes() {
+            let sign = match change.tag() {
+                ChangeTag::Delete => "-",
+                ChangeTag::Insert => "+",
+                ChangeTag::Equal => " ",
+            };
+            let line = format!("{}{}", sign, change.value().trim_end());
+            result.push(line);
+        }
+
+        result
     }
 
     fn scroll_content_down(&mut self) {
@@ -294,7 +340,22 @@ fn run_app<B: ratatui::backend::Backend>(
                 .file_content
                 .iter()
                 .skip(app.content_scroll)
-                .map(|line| Line::from(line.as_str()))
+                .map(|line| {
+                    // Colorize diff lines only when viewing a diff
+                    if app.is_diff_view {
+                        if line.starts_with('+') && !line.starts_with("+++") {
+                            Line::from(Span::styled(line.as_str(), Style::default().fg(Color::Green)))
+                        } else if line.starts_with('-') && !line.starts_with("---") {
+                            Line::from(Span::styled(line.as_str(), Style::default().fg(Color::Red)))
+                        } else if line.starts_with("---") || line.starts_with("+++") {
+                            Line::from(Span::styled(line.as_str(), Style::default().fg(Color::Cyan)))
+                        } else {
+                            Line::from(line.as_str())
+                        }
+                    } else {
+                        Line::from(line.as_str())
+                    }
+                })
                 .collect();
 
             let paragraph = Paragraph::new(content_text)
