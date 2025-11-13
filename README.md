@@ -6,6 +6,35 @@ Run a `command` in a sandbox to audit its behaviour and review filesystem change
 Use [Bubblewrap](https://github.com/containers/bubblewrap) to create an on-the-fly sandbox with
 a read-write overlay FS, with the host FS mounted read-only.
 
+### Running Commands in the Sandbox
+
+Use the included `launch-bwrap.sh` script to run commands inside the bubblewrap sandbox:
+
+```bash
+./launch-bwrap.sh <command> [args...]
+```
+
+For example:
+```bash
+./launch-bwrap.sh bash
+./launch-bwrap.sh npm install
+./launch-bwrap.sh python script.py
+```
+
+The script automatically:
+- Creates a unique temporary directory in `/tmp` for the overlay filesystem
+- Sets up the overlay and work directories
+- Mounts the host filesystem as read-only with an overlay on `/home`
+- Cleans up temporary directories on exit
+
+After running your command, use `audit-box` to review the FS changes and selectively apply them to the
+host FS.
+
+<details>
+<summary>Manual bubblewrap usage (advanced)</summary>
+
+If you prefer to manage the overlay directories manually:
+
 ```bash
 mkdir /tmp/overlay /tmp/work
 
@@ -18,9 +47,7 @@ bwrap \
     --new-session \
     ${command}
 ```
-
-Use `audit-box` to review the FS changes made by `command` and selectively apply them to the
-host FS.
+</details>
 
 Usage
 -----
