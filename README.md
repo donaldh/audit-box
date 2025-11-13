@@ -6,6 +6,8 @@ Run a `command` in a sandbox to audit its behaviour and review filesystem change
 Use [Bubblewrap](https://github.com/containers/bubblewrap) to create an on-the-fly sandbox with
 a read-write overlay FS, with the host FS mounted read-only.
 
+Note: This requires bwrap >= 0.11.0 with the --overlay feature.
+
 ### Running Commands in the Sandbox
 
 Use the included `launch-bwrap.sh` script to run commands inside the bubblewrap sandbox:
