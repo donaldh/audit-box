@@ -91,6 +91,7 @@ fn run_app<B: ratatui::backend::Backend>(
             // Render dialogs (if visible)
             ui::apply_dialog::render(f, app);
             ui::discard_dialog::render(f, app);
+            ui::help_dialog::render(f, app);
         })?;
 
         if event::poll(std::time::Duration::from_millis(100))? {
@@ -143,10 +144,21 @@ fn run_app<B: ratatui::backend::Backend>(
                         }
                         _ => {}
                     }
+                } else if app.show_help_dialog {
+                    // Handle help dialog - close on Esc or any key
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('?') => {
+                            app.show_help_dialog = false;
+                        }
+                        _ => {}
+                    }
                 } else {
                     // Handle normal navigation
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Char('h') | KeyCode::Char('?') => {
+                            app.show_help_dialog = true;
+                        }
                         KeyCode::Char('a') => {
                             app.show_confirm_dialog = true;
                         }
