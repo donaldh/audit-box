@@ -1,5 +1,6 @@
 mod app;
 mod file_operations;
+mod session;
 mod types;
 mod ui;
 
@@ -31,15 +32,21 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Commands {
+    /// Create a new audit-box session with temporary overlay directories
+    New {
+        /// Path to the base filesystem directory (defaults to current directory)
+        #[arg(long)]
+        base: Option<PathBuf>,
+    },
     /// Review and manage overlay filesystem changes
     Review {
-        /// Path to the overlay filesystem directory
+        /// Path to the overlay filesystem directory (uses saved session if not specified)
         #[arg(long)]
-        overlay: PathBuf,
+        overlay: Option<PathBuf>,
 
-        /// Path to the base filesystem directory
+        /// Path to the base filesystem directory (uses saved session if not specified)
         #[arg(long)]
-        base: PathBuf,
+        base: Option<PathBuf>,
     },
 }
 
@@ -47,19 +54,91 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match args.command {
+        Commands::New { base } => {
+            run_new(base)?;
+        }
         Commands::Review { overlay, base } => {
-            run_review(&overlay, base)?;
+            run_review(overlay, base)?;
         }
     }
 
     Ok(())
 }
 
-fn run_review(overlay: &PathBuf, base: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn run_new(base: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    // Resolve base path
+    let base_path = base.unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"));
+
+    // Check if base path exists
+    if !base_path.exists() {
+        return Err(format!("Base path '{}' does not exist", base_path.display()).into());
+    }
+
+    // Create the session directories
+    let tmpdir = session::create_session_dir()?;
+
+    // Save the session
+    session::save_session(&tmpdir)?;
+
+    println!("Created new audit-box session:");
+    println!("  Session directory: {}", tmpdir.display());
+    println!("  Overlay directory: {}", tmpdir.join("overlay").display());
+    println!("  Work directory: {}", tmpdir.join("work").display());
+    println!("  Base filesystem: {}", base_path.display());
+    println!();
+    println!("You can now use 'audit-box review' to review changes.");
+    println!();
+    println!("To use this session with bubblewrap:");
+    println!("  bwrap --ro-bind / / \\");
+    println!("        --tmpfs /tmp \\");
+    println!("        --unshare-pid \\");
+    println!("        --overlay-src {} \\", base_path.display());
+    println!("        --overlay {} {} {} \\",
+             tmpdir.join("overlay").display(),
+             tmpdir.join("work").display(),
+             base_path.display());
+    println!("        --dev /dev \\");
+    println!("        --new-session \\");
+    println!("        /bin/bash");
+
+    Ok(())
+}
+
+fn run_review(overlay: Option<PathBuf>, base: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    // Resolve overlay and base paths
+    let (overlay_path, base_path) = match (overlay, base) {
+        (Some(overlay), Some(base)) => {
+            // Both provided explicitly
+            (overlay, base)
+        }
+        (None, None) => {
+            // Load from saved session
+            let tmpdir = session::load_session()?;
+            let overlay = tmpdir.join("overlay");
+
+            // For now, we'll need base to be provided or use current directory
+            // In the future, we might want to save the base path in the session too
+            let base = std::env::current_dir()?;
+
+            (overlay, base)
+        }
+        _ => {
+            return Err("Both --overlay and --base must be provided together, or neither (to use saved session)".into());
+        }
+    };
+
+    // Validate paths exist
+    if !overlay_path.exists() {
+        return Err(format!("Overlay path '{}' does not exist", overlay_path.display()).into());
+    }
+    if !base_path.exists() {
+        return Err(format!("Base path '{}' does not exist", base_path.display()).into());
+    }
+
     // Setup filesystem watcher
     let (tx, rx) = channel();
     let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
-    watcher.watch(overlay, RecursiveMode::Recursive)?;
+    watcher.watch(&overlay_path, RecursiveMode::Recursive)?;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -69,7 +148,7 @@ fn run_review(overlay: &PathBuf, base: PathBuf) -> Result<(), Box<dyn std::error
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
-    let mut app = App::new(overlay, base, rx)?;
+    let mut app = App::new(&overlay_path, base_path, rx)?;
 
     // Run app
     let res = run_app(&mut terminal, &mut app);

@@ -54,6 +54,18 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::raw("Navigate files or scroll content"),
         ]),
         Line::from(vec![
+            Span::styled("  Home         ", Style::default().fg(Color::Green)),
+            Span::raw("Jump to first file in list"),
+        ]),
+        Line::from(vec![
+            Span::styled("  End          ", Style::default().fg(Color::Green)),
+            Span::raw("Jump to last file in list"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Left/Right   ", Style::default().fg(Color::Green)),
+            Span::raw("Collapse/expand directory"),
+        ]),
+        Line::from(vec![
             Span::styled("  Tab          ", Style::default().fg(Color::Green)),
             Span::raw("Switch between file list and content panes"),
         ]),
