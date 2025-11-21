@@ -25,22 +25,41 @@ use types::{ActivePane, DialogButton};
 #[command(name = "audit-box")]
 #[command(about = "TUI tool for managing overlay filesystem changes", long_about = None)]
 struct Args {
-    /// Path to the overlay filesystem directory
-    #[arg(long)]
-    overlay: PathBuf,
+    #[command(subcommand)]
+    command: Commands,
+}
 
-    /// Path to the base filesystem directory
-    #[arg(long)]
-    base: PathBuf,
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Review and manage overlay filesystem changes
+    Review {
+        /// Path to the overlay filesystem directory
+        #[arg(long)]
+        overlay: PathBuf,
+
+        /// Path to the base filesystem directory
+        #[arg(long)]
+        base: PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    match args.command {
+        Commands::Review { overlay, base } => {
+            run_review(&overlay, base)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_review(overlay: &PathBuf, base: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     // Setup filesystem watcher
     let (tx, rx) = channel();
     let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
-    watcher.watch(&args.overlay, RecursiveMode::Recursive)?;
+    watcher.watch(overlay, RecursiveMode::Recursive)?;
 
     // Setup terminal
     enable_raw_mode()?;
@@ -50,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
-    let mut app = App::new(&args.overlay, args.base, rx)?;
+    let mut app = App::new(overlay, base, rx)?;
 
     // Run app
     let res = run_app(&mut terminal, &mut app);
