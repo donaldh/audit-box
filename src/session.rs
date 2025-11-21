@@ -88,7 +88,6 @@ pub fn create_session_dir() -> io::Result<PathBuf> {
     Ok(tmpdir_path)
 }
 
-#[allow(dead_code)]
 pub fn clear_session() -> io::Result<()> {
     let session_path = get_session_file_path()?;
     if session_path.exists() {

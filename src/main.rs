@@ -54,6 +54,8 @@ enum Commands {
         #[arg(long)]
         base: Option<PathBuf>,
     },
+    /// Delete the current session directory and clear the session file
+    Delete,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -68,6 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Review { overlay, base } => {
             run_review(overlay, base)?;
+        }
+        Commands::Delete => {
+            run_delete()?;
         }
     }
 
@@ -109,6 +114,51 @@ fn run_new(base: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     println!("        --dev /dev \\");
     println!("        --new-session \\");
     println!("        /bin/bash");
+
+    Ok(())
+}
+
+fn run_delete() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{self, Write};
+
+    // Load the current session
+    let session = session::load_session()?;
+
+    // Display what will be deleted
+    println!("Current session:");
+    println!("  Session directory: {}", session.tmpdir.display());
+    println!("  Base filesystem: {}", session.base_path.display());
+    println!();
+    println!("This will permanently delete the session directory and all overlay files.");
+    println!("The base filesystem will NOT be affected.");
+    println!();
+
+    // Prompt for confirmation
+    print!("Are you sure you want to delete this session? (yes/no): ");
+    io::stdout().flush()?;
+
+    let mut response = String::new();
+    io::stdin().read_line(&mut response)?;
+    let response = response.trim().to_lowercase();
+
+    if response != "yes" && response != "y" {
+        println!("Deletion cancelled.");
+        return Ok(());
+    }
+
+    // Delete the session directory
+    if session.tmpdir.exists() {
+        std::fs::remove_dir_all(&session.tmpdir)?;
+        println!("Deleted session directory: {}", session.tmpdir.display());
+    } else {
+        println!("Session directory not found: {}", session.tmpdir.display());
+    }
+
+    // Clear the session file
+    session::clear_session()?;
+    println!("Cleared session file.");
+    println!();
+    println!("Session deleted successfully.");
 
     Ok(())
 }
