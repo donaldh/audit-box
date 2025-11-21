@@ -26,4 +26,5 @@ pub struct FileEntry {
     pub depth: usize,
     pub status: FileStatus,
     pub selected: bool,
+    pub collapsed: bool,
 }

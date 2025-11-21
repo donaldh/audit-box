@@ -9,11 +9,24 @@ use ratatui::{
 };
 
 pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
-    let items: Vec<ListItem> = app
-        .files
+    let visible_files = app.get_visible_files();
+
+    let items: Vec<ListItem> = visible_files
         .iter()
-        .map(|entry| {
+        .map(|(_, entry)| {
             let indent = "  ".repeat(entry.depth);
+
+            // Directory expand/collapse indicator
+            let dir_indicator = if entry.is_dir {
+                if entry.collapsed {
+                    "▶ "
+                } else {
+                    "▼ "
+                }
+            } else {
+                "  "
+            };
+
             let icon = if entry.is_dir { "📁" } else { "📄" };
             let status_indicator = match entry.status {
                 FileStatus::New => "[N]",
@@ -27,7 +40,7 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
 
             let content = vec![
                 Span::raw(selection_indicator),
-                Span::raw(format!("{}{} ", indent, icon)),
+                Span::raw(format!("{}{}{} ", indent, dir_indicator, icon)),
                 Span::styled(status_indicator, Style::default().fg(status_color)),
                 Span::raw(format!(" {}", entry.name)),
             ];
@@ -47,7 +60,7 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(file_list_border_style)
-                .title("Files [Space: select, Tab: switch, ↑↓: navigate, q: quit]"),
+                .title("Files [Space: select, ←→: collapse/expand, ↑↓: navigate, Tab: switch, q: quit]"),
         )
         .highlight_style(
             Style::default()
@@ -56,5 +69,15 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
         )
         .highlight_symbol(">> ");
 
-    f.render_stateful_widget(items, area, &mut app.list_state);
+    // Convert the selected index from the full file list to the visible list position
+    let mut render_state = ratatui::widgets::ListState::default();
+    if let Some(selected_idx) = app.list_state.selected() {
+        // Find the position of the selected index in the visible files
+        let visible_position = visible_files
+            .iter()
+            .position(|(idx, _)| *idx == selected_idx);
+        render_state.select(visible_position);
+    }
+
+    f.render_stateful_widget(items, area, &mut render_state);
 }

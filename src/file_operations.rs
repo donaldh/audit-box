@@ -40,6 +40,7 @@ pub fn scan_directory(
             depth,
             status,
             selected: false,
+            collapsed: false,
         });
 
         if is_dir {
@@ -150,6 +151,7 @@ pub fn update_or_add_file(
         depth,
         status,
         selected: false,
+        collapsed: false,
     };
 
     // Find if the file already exists in the list

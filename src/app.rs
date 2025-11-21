@@ -61,32 +61,58 @@ impl App {
     }
 
     pub fn next(&mut self) {
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i >= self.files.len() - 1 {
-                    0
+        let visible = self.get_visible_files();
+        if visible.is_empty() {
+            return;
+        }
+
+        let current_idx = self.list_state.selected();
+        let next_idx = if let Some(current) = current_idx {
+            // Find current position in visible list
+            if let Some(pos) = visible.iter().position(|(idx, _)| *idx == current) {
+                // Move to next visible item, or wrap to first
+                if pos >= visible.len() - 1 {
+                    visible[0].0
                 } else {
-                    i + 1
+                    visible[pos + 1].0
                 }
+            } else {
+                // Current selection not visible, go to first
+                visible[0].0
             }
-            None => 0,
+        } else {
+            visible[0].0
         };
-        self.list_state.select(Some(i));
+
+        self.list_state.select(Some(next_idx));
         self.load_selected_file_content();
     }
 
     pub fn previous(&mut self) {
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.files.len() - 1
+        let visible = self.get_visible_files();
+        if visible.is_empty() {
+            return;
+        }
+
+        let current_idx = self.list_state.selected();
+        let prev_idx = if let Some(current) = current_idx {
+            // Find current position in visible list
+            if let Some(pos) = visible.iter().position(|(idx, _)| *idx == current) {
+                // Move to previous visible item, or wrap to last
+                if pos == 0 {
+                    visible[visible.len() - 1].0
                 } else {
-                    i - 1
+                    visible[pos - 1].0
                 }
+            } else {
+                // Current selection not visible, go to first
+                visible[0].0
             }
-            None => 0,
+        } else {
+            visible[0].0
         };
-        self.list_state.select(Some(i));
+
+        self.list_state.select(Some(prev_idx));
         self.load_selected_file_content();
     }
 
@@ -179,12 +205,83 @@ impl App {
         }
     }
 
+    pub fn collapse_directory(&mut self) {
+        if let Some(selected) = self.list_state.selected() {
+            if let Some(entry) = self.files.get(selected).cloned() {
+                if entry.is_dir && !entry.collapsed {
+                    // Collapse the directory
+                    self.files[selected].collapsed = true;
+                } else if !entry.is_dir || entry.collapsed {
+                    // If it's a file or already collapsed, move to parent directory
+                    self.move_to_parent();
+                }
+            }
+        }
+    }
+
+    pub fn expand_directory(&mut self) {
+        if let Some(selected) = self.list_state.selected() {
+            if let Some(entry) = self.files.get(selected).cloned() {
+                if entry.is_dir && entry.collapsed {
+                    // Expand the directory
+                    self.files[selected].collapsed = false;
+                }
+            }
+        }
+    }
+
+    fn move_to_parent(&mut self) {
+        if let Some(selected) = self.list_state.selected() {
+            if let Some(entry) = self.files.get(selected) {
+                let current_path = &entry.path;
+                let current_depth = entry.depth;
+
+                // Find the parent directory by looking backwards for a directory with depth-1
+                for i in (0..selected).rev() {
+                    if self.files[i].is_dir
+                        && self.files[i].depth == current_depth.saturating_sub(1)
+                        && current_path.starts_with(&self.files[i].path) {
+                        self.list_state.select(Some(i));
+                        self.load_selected_file_content();
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn get_selected_files(&self) -> Vec<FileEntry> {
         self.files
             .iter()
             .filter(|e| e.selected && !e.is_dir)
             .cloned()
             .collect()
+    }
+
+    pub fn get_visible_files(&self) -> Vec<(usize, &FileEntry)> {
+        let mut visible = Vec::new();
+        let mut collapsed_dirs: Vec<(PathBuf, usize)> = Vec::new();
+
+        for (idx, entry) in self.files.iter().enumerate() {
+            // Remove collapsed dirs from stack if we've moved past their depth
+            collapsed_dirs.retain(|(_, depth)| entry.depth > *depth);
+
+            // Check if this entry is inside a collapsed directory
+            let is_hidden = collapsed_dirs.iter().any(|(dir_path, _)| {
+                entry.path.starts_with(dir_path) && entry.path != *dir_path
+            });
+
+            if !is_hidden {
+                visible.push((idx, entry));
+
+                // If this is a collapsed directory, add it to the stack
+                if entry.is_dir && entry.collapsed {
+                    collapsed_dirs.push((entry.path.clone(), entry.depth));
+                }
+            }
+        }
+
+        visible
     }
 
     pub fn apply_changes(&self) -> io::Result<()> {
