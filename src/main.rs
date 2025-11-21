@@ -38,6 +38,12 @@ enum Commands {
         #[arg(long)]
         base: Option<PathBuf>,
     },
+    /// Run a command in bubblewrap using the current session
+    Run {
+        /// Command and arguments to run in bubblewrap
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     /// Review and manage overlay filesystem changes
     Review {
         /// Path to the overlay filesystem directory (uses saved session if not specified)
@@ -56,6 +62,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.command {
         Commands::New { base } => {
             run_new(base)?;
+        }
+        Commands::Run { command } => {
+            run_run(command)?;
         }
         Commands::Review { overlay, base } => {
             run_review(overlay, base)?;
@@ -78,7 +87,7 @@ fn run_new(base: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let tmpdir = session::create_session_dir()?;
 
     // Save the session
-    session::save_session(&tmpdir)?;
+    session::save_session(&tmpdir, &base_path)?;
 
     println!("Created new audit-box session:");
     println!("  Session directory: {}", tmpdir.display());
@@ -104,6 +113,45 @@ fn run_new(base: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn run_run(command: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    // Load the session
+    let session = session::load_session()?;
+
+    let overlay_path = session.tmpdir.join("overlay");
+    let work_path = session.tmpdir.join("work");
+
+    // Build bwrap command
+    let mut bwrap_args = vec![
+        "--ro-bind".to_string(),
+        "/".to_string(),
+        "/".to_string(),
+        "--tmpfs".to_string(),
+        "/tmp".to_string(),
+        "--unshare-pid".to_string(),
+        "--overlay-src".to_string(),
+        session.base_path.display().to_string(),
+        "--overlay".to_string(),
+        overlay_path.display().to_string(),
+        work_path.display().to_string(),
+        session.base_path.display().to_string(),
+        "--dev".to_string(),
+        "/dev".to_string(),
+        "--new-session".to_string(),
+    ];
+
+    // Add user-provided command/arguments
+    bwrap_args.extend(command);
+
+    // Execute bwrap
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new("bwrap")
+        .args(&bwrap_args)
+        .exec();
+
+    // If exec returns, there was an error
+    Err(format!("Failed to execute bwrap: {}", error).into())
+}
+
 fn run_review(overlay: Option<PathBuf>, base: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve overlay and base paths
     let (overlay_path, base_path) = match (overlay, base) {
@@ -113,14 +161,10 @@ fn run_review(overlay: Option<PathBuf>, base: Option<PathBuf>) -> Result<(), Box
         }
         (None, None) => {
             // Load from saved session
-            let tmpdir = session::load_session()?;
-            let overlay = tmpdir.join("overlay");
+            let session = session::load_session()?;
+            let overlay = session.tmpdir.join("overlay");
 
-            // For now, we'll need base to be provided or use current directory
-            // In the future, we might want to save the base path in the session too
-            let base = std::env::current_dir()?;
-
-            (overlay, base)
+            (overlay, session.base_path)
         }
         _ => {
             return Err("Both --overlay and --base must be provided together, or neither (to use saved session)".into());

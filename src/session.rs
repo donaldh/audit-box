@@ -4,13 +4,19 @@ use std::path::{Path, PathBuf};
 
 const SESSION_FILE: &str = ".config/audit-box/sessions";
 
+#[derive(Debug)]
+pub struct Session {
+    pub tmpdir: PathBuf,
+    pub base_path: PathBuf,
+}
+
 pub fn get_session_file_path() -> io::Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Home directory not found"))?;
     Ok(home.join(SESSION_FILE))
 }
 
-pub fn save_session(tmpdir: &Path) -> io::Result<()> {
+pub fn save_session(tmpdir: &Path, base_path: &Path) -> io::Result<()> {
     let session_path = get_session_file_path()?;
 
     // Create parent directory if it doesn't exist
@@ -18,14 +24,15 @@ pub fn save_session(tmpdir: &Path) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    // Write the tmpdir path to the session file
+    // Write the tmpdir and base path to the session file (one per line)
     let mut file = fs::File::create(&session_path)?;
     writeln!(file, "{}", tmpdir.display())?;
+    writeln!(file, "{}", base_path.display())?;
 
     Ok(())
 }
 
-pub fn load_session() -> io::Result<PathBuf> {
+pub fn load_session() -> io::Result<Session> {
     let session_path = get_session_file_path()?;
 
     if !session_path.exists() {
@@ -36,7 +43,17 @@ pub fn load_session() -> io::Result<PathBuf> {
     }
 
     let content = fs::read_to_string(&session_path)?;
-    let tmpdir = PathBuf::from(content.trim());
+    let lines: Vec<&str> = content.lines().collect();
+
+    if lines.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Session file is corrupted. Please run 'audit-box new' to create a new session.",
+        ));
+    }
+
+    let tmpdir = PathBuf::from(lines[0]);
+    let base_path = PathBuf::from(lines[1]);
 
     // Check if the directory still exists
     if !tmpdir.exists() {
@@ -51,7 +68,7 @@ pub fn load_session() -> io::Result<PathBuf> {
         ));
     }
 
-    Ok(tmpdir)
+    Ok(Session { tmpdir, base_path })
 }
 
 pub fn create_session_dir() -> io::Result<PathBuf> {
