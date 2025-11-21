@@ -74,7 +74,7 @@ pub fn load_session() -> io::Result<Session> {
 pub fn create_session_dir() -> io::Result<PathBuf> {
     // Create a unique temporary directory in /tmp
     let tmpdir = tempfile::Builder::new()
-        .prefix("bwrap-overlay-")
+        .prefix("audit-box-")
         .tempdir_in("/tmp")?;
 
     // Keep the temp directory (don't delete on drop) and get its path

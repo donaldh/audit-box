@@ -17,7 +17,7 @@ AUDIT_BOX="./target/debug/audit-box"
 # Cleanup function
 cleanup() {
     rm -f "$TEST_SESSION_FILE" 2>/dev/null || true
-    rm -rf /tmp/bwrap-overlay-* 2>/dev/null || true
+    rm -rf /tmp/audit-box-* 2>/dev/null || true
 
     # Restore backup if it exists
     if [ -f "$TEST_SESSION_FILE.backup" ]; then
