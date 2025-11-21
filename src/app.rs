@@ -116,6 +116,22 @@ impl App {
         self.load_selected_file_content();
     }
 
+    pub fn jump_to_first(&mut self) {
+        let visible = self.get_visible_files();
+        if !visible.is_empty() {
+            self.list_state.select(Some(visible[0].0));
+            self.load_selected_file_content();
+        }
+    }
+
+    pub fn jump_to_last(&mut self) {
+        let visible = self.get_visible_files();
+        if !visible.is_empty() {
+            self.list_state.select(Some(visible[visible.len() - 1].0));
+            self.load_selected_file_content();
+        }
+    }
+
     pub fn load_selected_file_content(&mut self) {
         self.content_scroll = 0;
         if let Some(selected) = self.list_state.selected() {

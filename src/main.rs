@@ -198,6 +198,16 @@ fn run_app<B: ratatui::backend::Backend>(
                             ActivePane::FileList => app.previous(),
                             ActivePane::FileContent => app.scroll_content_up(),
                         },
+                        KeyCode::Home => {
+                            if app.active_pane == ActivePane::FileList {
+                                app.jump_to_first();
+                            }
+                        }
+                        KeyCode::End => {
+                            if app.active_pane == ActivePane::FileList {
+                                app.jump_to_last();
+                            }
+                        }
                         KeyCode::Left => {
                             if app.active_pane == ActivePane::FileList {
                                 app.collapse_directory();
