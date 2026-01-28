@@ -8,60 +8,48 @@ a read-write overlay FS, with the host FS mounted read-only.
 
 Note: This requires bwrap >= 0.11.0 with the --overlay feature.
 
+### Usage
+
+```bash
+Usage: audit-box <COMMAND>
+
+Commands:
+  new     Create a new audit-box session with temporary overlay directories
+  run     Run a command in bubblewrap using the current session
+  review  Review and manage overlay filesystem changes
+  delete  Delete the current session directory and clear the session file
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
 ### Running Commands in the Sandbox
 
-Use the included `launch-bwrap.sh` script to run commands inside the bubblewrap sandbox:
-
 ```bash
-./launch-bwrap.sh <command> [args...]
+audit-box new --base /home/user
 ```
 
-For example:
+Run commands:
+
 ```bash
-./launch-bwrap.sh bash
-./launch-bwrap.sh npm install
-./launch-bwrap.sh python script.py
+audit-box run claude
 ```
 
-The script automatically:
-- Creates a unique temporary directory in `/tmp` for the overlay filesystem
-- Sets up the overlay and work directories
-- Mounts the host filesystem as read-only with an overlay on `/home`
-- Cleans up temporary directories on exit
+### Reviewing file changes
 
-After running your command, use `audit-box` to review the FS changes and selectively apply them to the
-host FS.
-
-<details>
-<summary>Manual bubblewrap usage (advanced)</summary>
-
-If you prefer to manage the overlay directories manually:
+After running your command, use `audit-box review ` to review the FS changes and
+selectively apply them to the host FS.
 
 ```bash
-mkdir /tmp/overlay /tmp/work
-
-bwrap \
-    --ro-bind / / \
-    --overlay-src /home --overlay /tmp/overlay /tmp/work /home \
-    --tmpfs /tmp \
-    --dev /dev \
-    --unshare-pid \
-    --new-session \
-    ${command}
-```
-</details>
-
-Usage
------
-
-```bash
-audit-box --base /home --overlay /tmp/overlay
+audit-box review
 ```
 
 ### Key Bindings
 
 **Navigation:**
-- `↑` / `↓` - Navigate file list (when file list pane is active) or scroll content (when content pane is active)
+- `↑` / `↓` - Navigate file list (when file list pane is active) or scroll
+  content (when content pane is active)
 - `Tab` - Switch focus between file list pane and content pane
 
 **File Selection:**
@@ -103,3 +91,25 @@ audit-box --base /home --overlay /tmp/overlay
   - Lines starting with `+` (green) - additions
   - Lines starting with `-` (red) - deletions
   - Lines starting with `---` / `+++` (cyan) - file headers
+
+### Notes
+
+
+#### Manual bubblewrap usage
+
+Here is an example bubblewrap command that shows the overlay filesystem command
+line options:
+
+```bash
+mkdir /tmp/overlay /tmp/work
+
+bwrap \
+    --ro-bind / / \
+    --overlay-src /home --overlay /tmp/overlay /tmp/work /home \
+    --tmpfs /tmp \
+    --dev /dev \
+    --unshare-pid \
+    --new-session \
+    ${command}
+```
+</details>

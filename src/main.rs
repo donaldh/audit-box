@@ -3,6 +3,7 @@ mod file_operations;
 mod session;
 mod types;
 mod ui;
+mod seccomp;
 
 use app::App;
 use clap::Parser;
@@ -21,6 +22,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use types::{ActivePane, DialogButton};
+use std::fs::File;
 
 #[derive(Parser, Debug)]
 #[command(name = "audit-box")]
@@ -91,6 +93,9 @@ fn run_new(base: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     // Create the session directories
     let tmpdir = session::create_session_dir()?;
 
+    let filter_path = tmpdir.join("filters.bpf");
+    let _ = seccomp::generate(filter_path.to_str().unwrap());
+
     // Save the session
     session::save_session(&tmpdir, &base_path)?;
 
@@ -100,19 +105,33 @@ fn run_new(base: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     println!("  Work directory: {}", tmpdir.join("work").display());
     println!("  Base filesystem: {}", base_path.display());
     println!();
-    println!("You can now use 'audit-box review' to review changes.");
+    println!("You can now use 'audit-box run' to run commands in the sandbox.");
+    println!("Use 'audit-box review' to review changes.");
     println!();
-    println!("To use this session with bubblewrap:");
-    println!("  bwrap --ro-bind / / \\");
+    println!("To use this session with bubblewrap manually:");
+    println!("  bwrap --ro-bind /usr /usr \\");
+    println!("        --ro-bind /lib /lib \\");
+    println!("        --ro-bind /bin /bin \\");
+    println!("        --ro-bind /sbin /sbin \\");
+    println!("        --ro-bind /etc /etc \\");
+    println!("        --ro-bind /lib64 /lib64 \\");
+    println!("        --dir /tmp \\");
     println!("        --tmpfs /tmp \\");
     println!("        --unshare-pid \\");
     println!("        --overlay-src {} \\", base_path.display());
     println!("        --overlay {} {} {} \\",
-             tmpdir.join("overlay").display(),
-             tmpdir.join("work").display(),
-             base_path.display());
-    println!("        --dev /dev \\");
-    println!("        --new-session \\");
+            tmpdir.join("overlay").display(),
+            tmpdir.join("work").display(),
+            base_path.display());
+    println!("        --dev-bind /dev /dev \\");
+    println!("        --proc /proc \\");
+    println!("        --die-with-parent \\");
+    if let Some(home) = dirs::home_dir() {
+        let mitmproxy_cert = home.join(".mitmproxy/mitmproxy-ca-cert.pem");
+        if mitmproxy_cert.exists() {
+            println!("        --ro-bind {} /tmp/mitmproxy-ca.pem \\", mitmproxy_cert.display());
+        }
+    }
     println!("        /bin/bash");
 
     Ok(())
@@ -170,32 +189,64 @@ fn run_run(command: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let overlay_path = session.tmpdir.join("overlay");
     let work_path = session.tmpdir.join("work");
 
-    // Build bwrap command
+    // Build bwrap command with proper isolation
     let mut bwrap_args = vec![
-        "--ro-bind".to_string(),
-        "/".to_string(),
-        "/".to_string(),
-        "--tmpfs".to_string(),
-        "/tmp".to_string(),
+        // Bind essential system directories as read-only
+        "--ro-bind".to_string(), "/usr".to_string(), "/usr".to_string(),
+        "--ro-bind".to_string(), "/lib".to_string(), "/lib".to_string(),
+        "--ro-bind".to_string(), "/bin".to_string(), "/bin".to_string(),
+        "--ro-bind".to_string(), "/sbin".to_string(), "/sbin".to_string(),
+        "--ro-bind".to_string(), "/etc".to_string(), "/etc".to_string(),
+    ];
+
+    // Add lib64 if it exists
+    if std::path::Path::new("/lib64").exists() {
+        bwrap_args.extend_from_slice(&[
+            "--ro-bind".to_string(), "/lib64".to_string(), "/lib64".to_string(),
+        ]);
+    }
+
+    // Setup tmpfs and overlay
+    bwrap_args.extend_from_slice(&[
+        "--dir".to_string(), "/tmp".to_string(),
+        "--tmpfs".to_string(), "/tmp".to_string(),
         "--unshare-pid".to_string(),
-        "--overlay-src".to_string(),
-        session.base_path.display().to_string(),
-        "--overlay".to_string(),
-        overlay_path.display().to_string(),
+        "--overlay-src".to_string(), session.base_path.display().to_string(),
+        "--overlay".to_string(), overlay_path.display().to_string(),
         work_path.display().to_string(),
         session.base_path.display().to_string(),
-        "--dev".to_string(),
-        "/dev".to_string(),
-        "--new-session".to_string(),
-    ];
+        "--dev".to_string(), "/dev".to_string(),
+        "--dev-bind".to_string(), "/dev/pts".to_string(), "/dev/pts".to_string(),
+        "--dev-bind".to_string(), "/dev/tty".to_string(), "/dev/tty".to_string(),
+        "--proc".to_string(), "/proc".to_string(),
+        "--die-with-parent".to_string(),
+        "--seccomp".to_string(), "0".to_string(),
+    ]);
+
+    // Add mitmproxy certificate if it exists
+    let mitmproxy_cert = dirs::home_dir()
+        .map(|h| h.join(".mitmproxy/mitmproxy-ca-cert.pem"))
+        .filter(|p| p.exists());
+    
+    if let Some(cert_path) = mitmproxy_cert {
+        bwrap_args.extend_from_slice(&[
+            "--ro-bind".to_string(),
+            cert_path.display().to_string(),
+            "/tmp/mitmproxy-ca.pem".to_string(),
+        ]);
+    }
 
     // Add user-provided command/arguments
     bwrap_args.extend(command);
 
-    // Execute bwrap
+
+    let filters_path = session.tmpdir.join("filters.bpf");
+    let filters_file = File::open(&filters_path)?;
+
     use std::os::unix::process::CommandExt;
     let error = std::process::Command::new("bwrap")
         .args(&bwrap_args)
+        .stdin(filters_file)
         .exec();
 
     // If exec returns, there was an error
